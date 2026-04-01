@@ -7,10 +7,9 @@ use gpui::InteractiveElement as _;
 use gpui::ListHorizontalSizingBehavior;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use gpui_component::list::ListState;
 use gpui_component::{InteractiveElementExt, h_flex, v_flex};
 
-use crate::layout::{fs_data::FsNode, right_panel::FileListDelegate};
+use crate::layout::{fs_data::FsNode, right_panel::FileListState};
 
 #[derive(Clone)]
 struct ExplorerNode {
@@ -35,11 +34,11 @@ struct VisibleEntry {
 pub struct ExplorerState {
     roots: Vec<ExplorerNode>,
     selected_path: Option<PathBuf>,
-    list_state: Entity<ListState<FileListDelegate>>,
+    list_state: Entity<FileListState>,
 }
 
 impl ExplorerState {
-    pub fn new(start_dir: PathBuf, list_state: Entity<ListState<FileListDelegate>>) -> Self {
+    pub fn new(start_dir: PathBuf, list_state: Entity<FileListState>) -> Self {
         let mut state = Self {
             roots: Vec::new(),
             selected_path: Some(start_dir.clone()),
@@ -79,10 +78,7 @@ impl ExplorerState {
         let selected_file = (!path.is_dir()).then_some(clicked_path.as_path());
 
         self.list_state.update(cx, |state, cx| {
-            state
-                .delegate_mut()
-                .set_directory(target_dir.clone(), rows, selected_file);
-            cx.notify();
+            state.set_directory(target_dir.clone(), rows, selected_file, cx);
         });
         self.rebuild_roots(&target_dir);
         self.selected_path = Some(clicked_path.clone());
@@ -91,12 +87,7 @@ impl ExplorerState {
     }
 
     pub fn navigate_up(&mut self, cx: &mut Context<Self>) {
-        let current_dir = self
-            .list_state
-            .read(cx)
-            .delegate()
-            .current_dir_path()
-            .to_path_buf();
+        let current_dir = self.list_state.read(cx).current_dir_path().to_path_buf();
 
         if let Some(parent) = current_dir.parent() {
             self.activate_path(parent, cx);
@@ -106,7 +97,6 @@ impl ExplorerState {
     pub fn can_navigate_up(&self, cx: &App) -> bool {
         self.list_state
             .read(cx)
-            .delegate()
             .current_dir_path()
             .parent()
             .is_some()
@@ -119,10 +109,7 @@ impl ExplorerState {
         let rows = super::fs_data::file_rows_for(&parent_dir);
 
         self.list_state.update(cx, |state, cx| {
-            state
-                .delegate_mut()
-                .set_directory(parent_dir.clone(), rows, Some(path.as_path()));
-            cx.notify();
+            state.set_directory(parent_dir.clone(), rows, Some(path.as_path()), cx);
         });
         self.selected_path = Some(path.clone());
         self.ensure_visible(&path);
@@ -175,26 +162,24 @@ impl Render for ExplorerState {
                         let item = h_flex()
                             .id(row_id)
                             .h(px(28.))
+                            .w_full()
                             .items_center()
                             .gap_1()
                             .px_2()
-                            .rounded_md()
                             .border_1()
                             .border_color(rgba(0x00000000))
+                            .when(!entry.selected, |this| {
+                                this.hover(|this| this.bg(rgb(0xf1f5f9)))
+                            })
                             .when(entry.selected, |this| {
                                 this.bg(rgb(0xe0f2fe)).border_color(rgb(0x7dd3fc))
                             })
                             .on_click({
                                 let state = state.clone();
                                 let row_path = row_path.clone();
-                                let is_dir = entry.is_dir;
                                 move |_, _, app| {
                                     state.update(app, |this, cx| {
-                                        if is_dir {
-                                            this.toggle_expand(&row_path, cx);
-                                        } else {
-                                            this.select_path(row_path.clone(), cx);
-                                        }
+                                        this.select_path(row_path.clone(), cx);
                                     });
                                 }
                             })
@@ -245,6 +230,7 @@ pub fn left_panel(state: &Entity<ExplorerState>) -> impl IntoElement {
     v_flex()
         .flex_1()
         .h_full()
+        .p_1()
         .bg(rgb(0xffffff))
         .overflow_hidden()
         .child(state.clone())

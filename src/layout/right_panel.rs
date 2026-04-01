@@ -1,12 +1,14 @@
-use std::path::{Path, PathBuf};
+use std::{
+    ops::Range,
+    path::{Path, PathBuf},
+};
 
 use gpui::InteractiveElement as _;
+use gpui::ListHorizontalSizingBehavior;
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::{
-    Icon, IconName, IndexPath, Sizable, StyledExt, h_flex,
-    list::{List, ListDelegate, ListItem, ListState},
-    tag::Tag,
-    v_flex,
+    Icon, IconName, InteractiveElementExt, Sizable, StyledExt, h_flex, tag::Tag, v_flex,
 };
 
 use crate::layout::left_panel::ExplorerState;
@@ -50,19 +52,19 @@ impl FileRow {
     }
 }
 
-pub struct FileListDelegate {
+pub struct FileListState {
     current_dir: PathBuf,
     rows: Vec<FileRow>,
-    selected: Option<IndexPath>,
+    selected_path: Option<PathBuf>,
     explorer: Option<Entity<ExplorerState>>,
 }
 
-impl FileListDelegate {
+impl FileListState {
     pub fn new(current_dir: PathBuf, rows: Vec<FileRow>) -> Self {
         Self {
             current_dir,
             rows,
-            selected: Some(IndexPath::new(0)),
+            selected_path: None,
             explorer: None,
         }
     }
@@ -76,17 +78,17 @@ impl FileListDelegate {
         current_dir: PathBuf,
         rows: Vec<FileRow>,
         selected_path: Option<&Path>,
+        cx: &mut Context<Self>,
     ) {
         self.current_dir = current_dir;
         self.rows = rows;
-        self.selected = selected_path
-            .and_then(|selected_path| {
-                self.rows
-                    .iter()
-                    .position(|row| row.path() == selected_path)
-                    .map(IndexPath::new)
-            })
-            .or_else(|| (!self.rows.is_empty()).then(|| IndexPath::new(0)));
+        self.selected_path = selected_path.map(Path::to_path_buf);
+        cx.notify();
+    }
+
+    fn select_path(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        self.selected_path = Some(path);
+        cx.notify();
     }
 
     pub fn len(&self) -> usize {
@@ -102,101 +104,119 @@ impl FileListDelegate {
     }
 }
 
-impl ListDelegate for FileListDelegate {
-    type Item = ListItem;
-
-    fn items_count(&self, _: usize, _: &App) -> usize {
-        self.rows.len()
-    }
-
-    fn render_item(
-        &mut self,
-        ix: IndexPath,
-        _: &mut Window,
-        _: &mut Context<ListState<Self>>,
-    ) -> Option<Self::Item> {
-        let row = self.rows.get(ix.row)?;
-        let selected = self
-            .selected
-            .is_some_and(|selected_ix| selected_ix.eq_row(ix));
+impl Render for FileListState {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let state = cx.entity();
+        let rows = self.rows.clone();
+        let selected_path = self.selected_path.clone();
         let explorer = self.explorer.clone();
-        let row_path = row.path().to_path_buf();
-        let content_id: SharedString = format!("file-row-content-{}", row_path.display()).into();
 
-        Some(
-            ListItem::new(ix).child(
-                h_flex()
-                    .id(content_id)
-                    .w_full()
-                    .items_center()
-                    .justify_between()
-                    .gap_3()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(if selected {
-                        rgb(0x7dd3fc)
-                    } else {
-                        rgba(0x00000000)
-                    })
-                    .bg(if selected {
-                        rgb(0xe0f2fe)
-                    } else {
-                        rgba(0x00000000)
-                    })
-                    .px_3()
-                    .py_2()
-                    .on_click(move |event, _, app| {
-                        if let Some(explorer) = explorer.clone() {
-                            if event.click_count() == 2 && row_path.is_dir() {
-                                app.stop_propagation();
-                                explorer.update(app, |this, cx| this.activate_path(&row_path, cx));
-                            }
-                        }
-                    })
-                    .child(
-                        h_flex().items_center().gap_3().child(file_icon(row)).child(
-                            v_flex()
-                                .gap_1()
-                                .child(div().font_medium().child(row.name.clone()))
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(rgb(0x64748b))
-                                        .child(relative_name(row)),
-                                ),
-                        ),
-                    )
-                    .child(
-                        h_flex()
+        div().size_full().relative().child(
+            uniform_list(
+                "file-list-entries",
+                rows.len(),
+                cx.processor(move |_this, range: Range<usize>, _window, _cx| {
+                    let mut items = Vec::with_capacity(range.len());
+
+                    for ix in range {
+                        let row = rows[ix].clone();
+                        let row_path = row.path().to_path_buf();
+                        let is_selected = selected_path
+                            .as_ref()
+                            .is_some_and(|selected| selected == &row_path);
+                        let row_id: SharedString =
+                            format!("file-row-{}", row_path.display()).into();
+
+                        let item = h_flex()
+                            .id(row_id)
+                            .w_full()
                             .items_center()
+                            .justify_between()
                             .gap_3()
-                            .child(file_kind_tag(row))
+                            .border_1()
+                            .border_color(if is_selected {
+                                rgb(0x7dd3fc)
+                            } else {
+                                rgba(0x00000000)
+                            })
+                            .bg(if is_selected {
+                                rgb(0xe0f2fe)
+                            } else {
+                                rgba(0x00000000)
+                            })
+                            .when(!is_selected, |this| {
+                                this.hover(|this| this.bg(rgb(0xf1f5f9)))
+                            })
+                            .px_3()
+                            .py_2()
+                            .on_click({
+                                let state = state.clone();
+                                let row_path = row_path.clone();
+                                move |_, _, app| {
+                                    state.update(app, |this, cx| {
+                                        this.select_path(row_path.clone(), cx)
+                                    });
+                                }
+                            })
+                            .on_double_click({
+                                let explorer = explorer.clone();
+                                let row_path = row_path.clone();
+                                move |_, _, app| {
+                                    if row_path.is_dir() {
+                                        if let Some(explorer) = explorer.clone() {
+                                            explorer.update(app, |this, cx| {
+                                                this.activate_path(&row_path, cx)
+                                            });
+                                        }
+                                    }
+                                }
+                            })
                             .child(
-                                div()
-                                    .min_w(px(56.))
-                                    .text_right()
-                                    .text_sm()
-                                    .text_color(rgb(0x64748b))
-                                    .child(row.size.clone()),
-                            ),
-                    ),
-            ),
-        )
-    }
+                                h_flex()
+                                    .items_center()
+                                    .gap_3()
+                                    .child(file_icon(&row))
+                                    .child(
+                                        v_flex()
+                                            .gap_1()
+                                            .child(div().font_medium().child(row.name.clone()))
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .text_color(rgb(0x64748b))
+                                                    .child(relative_name(&row)),
+                                            ),
+                                    ),
+                            )
+                            .child(
+                                h_flex()
+                                    .items_center()
+                                    .gap_3()
+                                    .child(file_kind_tag(&row))
+                                    .child(
+                                        div()
+                                            .min_w(px(56.))
+                                            .text_right()
+                                            .text_sm()
+                                            .text_color(rgb(0x64748b))
+                                            .child(row.size.clone()),
+                                    ),
+                            );
 
-    fn set_selected_index(
-        &mut self,
-        ix: Option<IndexPath>,
-        _: &mut Window,
-        cx: &mut Context<ListState<Self>>,
-    ) {
-        self.selected = ix;
-        cx.notify();
+                        items.push(item.into_any_element());
+                    }
+
+                    items
+                }),
+            )
+            .with_horizontal_sizing_behavior(ListHorizontalSizingBehavior::Unconstrained)
+            .size_full(),
+        )
     }
 }
 
 pub fn right_panel(
-    state: &Entity<ListState<FileListDelegate>>,
+    state: &Entity<FileListState>,
     _explorer: &Entity<ExplorerState>,
     _current_dir_label: &str,
     _item_count: usize,
@@ -204,14 +224,13 @@ pub fn right_panel(
     v_flex()
         .flex_1()
         .h_full()
-        .pt_1()
-        .pb_1()
+        .p_1()
         .border_r_1()
         .border_color(rgb(0xe4e4e7))
         .bg(rgb(0xffffff))
         .overflow_hidden()
         .gap_2()
-        .child(List::new(state).size_full().px_2().py_2())
+        .child(state.clone())
 }
 
 fn file_icon(row: &FileRow) -> impl IntoElement {

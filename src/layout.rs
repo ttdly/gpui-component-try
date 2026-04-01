@@ -5,33 +5,26 @@ mod right_panel;
 
 use gpui::*;
 use gpui_component::{
-    list::ListState,
     resizable::{ResizableState, h_resizable, resizable_panel},
     v_flex,
 };
 
 pub struct NarrowTopWideBottom {
     explorer: Entity<left_panel::ExplorerState>,
-    list: Entity<ListState<right_panel::FileListDelegate>>,
+    list: Entity<right_panel::FileListState>,
     split: Entity<ResizableState>,
 }
 
 impl NarrowTopWideBottom {
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
         let start_dir = fs_data::start_dir();
         let rows = fs_data::file_rows_for(&start_dir);
 
-        let list = cx.new(|cx| {
-            ListState::new(
-                right_panel::FileListDelegate::new(start_dir.clone(), rows),
-                window,
-                cx,
-            )
-        });
+        let list = cx.new(|_| right_panel::FileListState::new(start_dir.clone(), rows));
         let explorer = cx.new(|_| left_panel::ExplorerState::new(start_dir.clone(), list.clone()));
         let split = cx.new(|_| ResizableState::default());
         list.update(cx, |state, _| {
-            state.delegate_mut().bind_explorer(explorer.clone());
+            state.bind_explorer(explorer.clone());
         });
         cx.observe(&list, |_, _, cx| cx.notify()).detach();
         cx.observe(&explorer, |_, _, cx| cx.notify()).detach();
@@ -47,8 +40,8 @@ impl NarrowTopWideBottom {
 impl Render for NarrowTopWideBottom {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let (item_count, current_dir_label) = {
-            let delegate = self.list.read(cx).delegate();
-            (delegate.len(), delegate.current_dir_label())
+            let list = self.list.read(cx);
+            (list.len(), list.current_dir_label())
         };
         let can_go_up = self.explorer.read(cx).can_navigate_up(cx);
 
